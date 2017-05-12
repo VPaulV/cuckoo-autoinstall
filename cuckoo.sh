@@ -27,7 +27,10 @@ function usage
 #machine=$4
 
 rand_passwd=$(date +%s | sha256sum | base64 | head -c 32 ; echo)
+
 auto_ip=$(ip route | grep src | awk '{print $9}')
+IFS='\n' read -r -a tmp_array <<< "$auto_ip"
+auto_ip=${tmp_array[0]}
 
 cuckoo_path=${1:-/opt} #Default path: /opt
 passwd=${2:-$rand_passwd} #Default password is randomish
@@ -266,10 +269,12 @@ function create_cuckoo_user
 echo -e '\e[35m[+] Creating Cuckoo User \e[0m'
 
 	#Creates cuckoo system user
-	adduser --system cuckoo >/dev/null 2>&1
+	#adduser --system cuckoo >/dev/null 2>&1
+        useradd -m cuckoo
 	usermod -L cuckoo
 	usermod -a -G kvm cuckoo
 	usermod -a -G libvirtd cuckoo
+        grep -q '^cuckoo:' /etc/group || groupadd cuckoo
 	usermod -a -G cuckoo $USER
 }
 
@@ -350,19 +355,18 @@ echo -e '\e[35m[+] Installing Nginx \e[0m'
 echo -e '\e[93m    [+] Configuring \e[0m'
 
 	#Remove default nginx configuration
-	rm /etc/nginx/sites-enabled/default
+	rm -f /etc/nginx/sites-enabled/default
 
 	#Create cuckoo web server config
 	cp /tmp/gen-configs/nginx_config /etc/nginx/sites-available/cuckoo
 
-	#Modify nginx IP for web interface
 	sed -i -e "s@listen IP_Address\:443@listen $my_ip\:443@" /etc/nginx/sites-available/cuckoo
 	sed -i -e "s@listen IP_Address\:80@listen $my_ip\:80@" /etc/nginx/sites-available/cuckoo
 	sed -i -e "s@listen IP_Address\:4343@listen $my_ip\:4343@" /etc/nginx/sites-available/cuckoo
 	sed -i -e "s@allow IP_Address@allow $my_ip@" /etc/nginx/sites-available/cuckoo
 
 	#Enable cuckoo nginx config
-	ln -s /etc/nginx/sites-available/cuckoo /etc/nginx/sites-enabled/cuckoo
+	ln -fs /etc/nginx/sites-available/cuckoo /etc/nginx/sites-enabled/cuckoo
 
 }
 
@@ -372,7 +376,7 @@ function self_ssl
 echo -e '\e[93m    [+] Creating Self-Signed SSL Certificate \e[0m'
 
 	#Create ssl key folder
-	mkdir /etc/nginx/ssl
+	mkdir -p /etc/nginx/ssl
 
 	#Generate self-signed certificate
 	openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/nginx/ssl/cuckoo.key -out /etc/nginx/ssl/cuckoo.crt -subj "/C=XX/ST=XX/L=XX/O=IT/CN=$my_ip" >/dev/null 2>&1
@@ -447,7 +451,7 @@ echo -e '\e[35m[+] Installing Routetor \e[0m'
 echo -e '\e[35m[+] Installing Vsftpd \e[0m'
 
 	#Create public accessible folder
-	mkdir /home/cuckoo/vmshared/pub
+	mkdir -p /home/cuckoo/vmshared/pub
 	chown cuckoo:cuckoo /home/cuckoo/vmshared/pub
 	chmod 777 /home/cuckoo/vmshared/pub
 
