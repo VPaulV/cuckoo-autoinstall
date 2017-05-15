@@ -34,8 +34,11 @@ auto_ip=${tmp_array[0]}
 
 cuckoo_path=${1:-/opt} #Default path: /opt
 passwd=${2:-$rand_passwd} #Default password is randomish
-my_ip=${3:-$auto_ip} #Default to interface ip on install machine
-machine=${4:-kvm} #Default machinery: kvm
+winiso=${3:-no} #Path to the windows7 iso. Default nothing
+my_ip=${4:-$auto_ip} #Default to interface ip on install machine
+machine=${5:-virtualbox} #Default machinery: kvm
+vboxnetname=${6:-vboxnet0} #Default virtual interface name: vboxnet0
+vboxnetsn=${7:-192.168.56.0/24} #Default virtual interface subnet: 192.168.56.0/24
 
 cuckoo_passwd=$passwd
 db_passwd=\'$passwd\'
@@ -61,7 +64,7 @@ echo -e '\e[35m[+] Installing Dependencies \e[0m'
 
 	#Basic dependencies
 	echo -e '\e[93m    [+] Round 1 of 3 \e[0m'
-	apt-get install mongodb python python-dev python-pip python-m2crypto swig -y >/dev/null 2>&1
+	apt-get install iptables-persistent mongodb python python-dev python-pip python-m2crypto swig -y >/dev/null 2>&1
 	echo -e '\e[93m    [+] Round 2 of 3 \e[0m'
 	apt-get install libvirt-dev upx-ucl libssl-dev unzip p7zip-full libgeoip-dev libjpeg-dev -y >/dev/null 2>&1
 	echo -e '\e[93m    [+] Round 3 of 3 \e[0m'
@@ -186,7 +189,9 @@ echo -e '\e[35m[+] Installing PostgreSQL \e[0m'
 	pip install psycopg2 >/dev/null 2>&1
 
 echo -e '\e[35m[+] Configuring PostgreSQL DB \e[0m'
-
+        sudo su
+        echo "host  all  all 0.0.0.0/0 md5" >> /etc/postgresql/9.5/main/pg_hba.conf  
+	echo "listen_addresses = 'localhost'" >> /etc/postgresql/9.5/main/postgresql.conf  
 	su - postgres <<EOF
 psql -c "CREATE USER cuckoo WITH PASSWORD $db_passwd;" >/dev/null 2>&1
 psql -c "CREATE DATABASE cuckoo;" >/dev/null 2>&1
@@ -293,6 +298,7 @@ cp cuckoo-modified/agent/agent.py vmshared/agent.pyw
 EOF
 
 	chmod ug=rwX,o=rX /home/cuckoo/vmshared
+        rm -rf $cuckoo_path/cuckoo
 	mv /home/cuckoo/cuckoo-modified $cuckoo_path/cuckoo
 	pip install -r $cuckoo_path/cuckoo/requirements.txt >/dev/null 2>&1
 	cp /tmp/gen-configs/suricata-cuckoo.yaml /etc/suricata/suricata-cuckoo.yaml
@@ -466,6 +472,39 @@ echo -e '\e[35m[+] Installing Vsftpd \e[0m'
 
 }
 
+function vbox_network_setup
+{
+
+echo -e '\e[35m[+] Configuring network \e[0m'
+
+        sudo vboxmanage hostonlyif create
+	sudo iptables -A FORWARD -o eth0 -i "$vboxnetname$" -s "$vboxnetsn" -m conntrack --ctstate NEW -j ACCEPT;  
+	sudo iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT;  
+	sudo iptables -A POSTROUTING -t nat -j MASQUERADE; 
+	sudo sh -c iptables-save > /etc/iptables/rules.v4
+	sudo sysctl -w net.ipv4.ip_forward=1; 
+}
+
+function vbox_create_image
+{
+
+echo -e '\e[35m[+] Creating vbox image \e[0m'
+
+	pip install vmcloak --upgrade
+	sudo mkdir -p /mnt/win7x64
+	sudo mount -o loop,ro $winiso /mnt/win7x64
+	
+	vmcloak-vboxnet0
+        su - cuckoo <<EOF
+pip install vmcloak --upgrade
+vmcloak init --win7x64 cuckoo1 --iso-mount /mnt/win7x64 -d  
+
+vmcloak install cuckoo1 adobe9 wic pillow dotnet40 java7
+vmcloak snapshot cuckoo1 cuckoo1 192.168.56.101
+EOF
+        sudo umount /mnt/win7x64
+}
+
 function startup_script
 {
 
@@ -511,7 +550,7 @@ if [ $EUID -ne 0 ]; then
 	exit 1
 fi
 
-if [ "$4" = 'virtualbox' ]; then
+if [ "$machine" = 'virtualbox' ]; then
 
 	deps
 	postgres
@@ -521,8 +560,11 @@ if [ "$4" = 'virtualbox' ]; then
 	nginx
 	self_ssl
 	misc_apps
+        vbox_network_setup
 	startup_script
-
+	if [ "$winiso" != 'no' ]; then
+		vbox_create_image
+        fi
 else
 
 	deps
